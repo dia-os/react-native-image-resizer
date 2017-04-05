@@ -13,6 +13,7 @@ import android.provider.MediaStore;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.Base64;
+import android.util.Log;
 import android.util.Pair;
 
 import java.io.Closeable;
@@ -29,9 +30,7 @@ import java.util.Date;
  */
 class ImageResizer {
 
-    public final static String BASE64_PREFIX = "data:image/";
-    public final static String CONTENT_PREFIX = "content://";
-    public final static String FILE_PREFIX = "file:";
+    private final static String BASE64_PREFIX = "data:image/";
 
     /**
      * Resize the specified bitmap, keeping its aspect ratio.
@@ -190,20 +189,11 @@ class ImageResizer {
     /**
      * Load a bitmap either from a real file or using the {@link ContentResolver} of the current
      * {@link Context} (to read gallery images for example).
-     *
-     * Note that, when options.inJustDecodeBounds = true, we actually expect sourceImage to remain
-     * as null (see https://developer.android.com/training/displaying-bitmaps/load-bitmap.html), so
-     * getting null sourceImage at the completion of this method is not always worthy of an error.
      */
     private static Bitmap loadBitmap(Context context, String imagePath, BitmapFactory.Options options) throws IOException {
         Bitmap sourceImage = null;
-        if (!imagePath.startsWith(CONTENT_PREFIX)) {
-            try {
-                sourceImage = BitmapFactory.decodeFile(imagePath, options);
-            } catch (Exception e) {
-                e.printStackTrace();
-                throw new IOException("Error decoding image file");
-            }
+        if (!imagePath.startsWith("content://") && !imagePath.startsWith("file://")) {
+            sourceImage = BitmapFactory.decodeFile(imagePath, options);
         } else {
             ContentResolver cr = context.getContentResolver();
             InputStream input = cr.openInputStream(Uri.parse(imagePath));
@@ -241,7 +231,7 @@ class ImageResizer {
      */
     private static Bitmap loadBitmapFromBase64(String imagePath) {
         Bitmap sourceImage = null;
-
+        Log.d("resize1110a", "1");
         // base64 image.  Convert to a bitmap.
         final int prefixLen = BASE64_PREFIX.length();
         final boolean isJpeg = (imagePath.indexOf("jpeg") == prefixLen);
@@ -250,11 +240,28 @@ class ImageResizer {
         if (isJpeg || isPng){
             commaLocation = imagePath.indexOf(',');
         }
-        if (commaLocation > 0) {
-            final String encodedImage = imagePath.substring(commaLocation+1);
-            final byte[] decodedString = Base64.decode(encodedImage, Base64.DEFAULT);
-            sourceImage = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.length);
-        }
+
+            if (commaLocation > 0) {
+                //Log.d("resize1110b", "1");
+                try {
+                //Log.d("resize1110c", "x");
+                final String encodedImage = imagePath.substring(commaLocation+1);
+                //Log.d("resize1110c", "1");
+                final byte[] decodedString = Base64.decode(encodedImage, Base64.DEFAULT);
+                //Log.d("resize1111", "1");
+                sourceImage = BitmapFactory.decodeByteArray(decodedString, 0, decodedString.length);
+                //Log.d("resize1112", "1");
+                }catch (OutOfMemoryError e){
+           /* try {
+                Log.d("resize111", e.toString());
+            }catch (Exception exp){
+                Log.d("resize11100", e.toString());
+            }*/
+                    return null;
+                }
+            }
+
+        //Log.d("checkpoint12","2");
 
         return sourceImage;
     }
@@ -264,49 +271,68 @@ class ImageResizer {
      */
     public static String createResizedImage(Context context, String imagePath, int newWidth,
                                             int newHeight, Bitmap.CompressFormat compressFormat,
-                                            int quality, int rotation, String outputPath) throws IOException  {
+                                            int quality, int rotation, String outputPath)  {
         Bitmap sourceImage = null;
 
-        // If the BASE64_PREFIX is absent, load bitmap from a file. Otherwise, load from base64.
-        if (!imagePath.startsWith(BASE64_PREFIX)) {
-            sourceImage = ImageResizer.loadBitmapFromFile(context, imagePath, newWidth, newHeight);
+        try{
+            // If the BASE64_PREFIX is absent, load bitmap from a file.  Otherwise, load from base64.
+            if (imagePath.indexOf(BASE64_PREFIX) < 0) {
+                //Log.d("checkpointaaaa","1");
+                sourceImage = ImageResizer.loadBitmapFromFile(context, imagePath, newWidth, newHeight);
+                //Log.d("checkpointbbbb","1");
+            }
+            else {
+                //Log.d("checkpoint000","1");
+                sourceImage = ImageResizer.loadBitmapFromBase64(imagePath);
+                //Log.d("checkpoint111",sourceImage.toString());
+            }
+            //Log.d("checkpoint1",sourceImage.toString());
+
+            if (sourceImage == null){
+                //Log.d("checkpoint2","1");
+                return "";
+            }
+
+            //Log.d("checkpoint3","1");
+            // Scale it first so there are fewer pixels to transform in the rotation
+            Bitmap scaledImage = ImageResizer.resizeImage(sourceImage, newWidth, newHeight);
+            if (sourceImage != scaledImage) {
+                sourceImage.recycle();
+            }
+            //Log.d("checkpoint4","1");
+            // Rotate if necessary
+            Bitmap rotatedImage = scaledImage;
+            int orientation = getOrientation(context, Uri.parse(imagePath));
+            rotation = orientation + rotation;
+            rotatedImage = ImageResizer.rotateImage(scaledImage, rotation);
+
+            if (scaledImage != rotatedImage) {
+                scaledImage.recycle();
+            }
+
+            //Log.d("checkpoint5","1");
+            // Save the resulting image
+            File path = context.getCacheDir();
+            if (outputPath != null) {
+                path = new File(outputPath);
+            }
+            //Log.d("checkpoint6","1");
+            String resizedImagePath = ImageResizer.saveImage(rotatedImage, path,
+                    Long.toString(new Date().getTime()), compressFormat, quality);
+
+            // Clean up remaining image
+            rotatedImage.recycle();
+            //Log.d("checkpoint7","1");
+            return resizedImagePath;
+
+        }catch (OutOfMemoryError e){
+             //Log.d("resizedImagePath111",e.toString());
+            return "";
+        }catch (Exception e){
+            return "";
         }
-        else {
-            sourceImage = ImageResizer.loadBitmapFromBase64(imagePath);
-        }
 
-        if (sourceImage == null) {
-            throw new IOException("Unable to load source image from path");
-        }
 
-        // Scale it first so there are fewer pixels to transform in the rotation
-        Bitmap scaledImage = ImageResizer.resizeImage(sourceImage, newWidth, newHeight);
-        if (sourceImage != scaledImage) {
-            sourceImage.recycle();
-        }
 
-        // Rotate if necessary
-        Bitmap rotatedImage = scaledImage;
-        int orientation = getOrientation(context, Uri.parse(imagePath));
-        rotation = orientation + rotation;
-        rotatedImage = ImageResizer.rotateImage(scaledImage, rotation);
-
-        if (scaledImage != rotatedImage) {
-            scaledImage.recycle();
-        }
-
-        // Save the resulting image
-        File path = context.getCacheDir();
-        if (outputPath != null) {
-            path = new File(outputPath);
-        }
-
-        String resizedImagePath = ImageResizer.saveImage(rotatedImage, path,
-                Long.toString(new Date().getTime()), compressFormat, quality);
-
-        // Clean up remaining image
-        rotatedImage.recycle();
-
-        return resizedImagePath;
     }
 }
