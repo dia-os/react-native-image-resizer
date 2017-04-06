@@ -31,6 +31,8 @@ import java.util.Date;
 class ImageResizer {
 
     private final static String BASE64_PREFIX = "data:image/";
+    public final static String CONTENT_PREFIX = "content://";
+    public final static String FILE_PREFIX = "file:";
 
     /**
      * Resize the specified bitmap, keeping its aspect ratio.
